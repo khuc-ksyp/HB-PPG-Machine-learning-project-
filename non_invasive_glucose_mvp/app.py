@@ -30,6 +30,7 @@ from src.config import (
     DATA_CSV_DIR,
     CLEANED_FEATURES_PATH,
     MODEL_SAVE_PATH,
+    ARTIFACTS_DIR,
     CHANNEL_NAMES,
     SAMPLING_FREQ,
     TARGET_COLUMN,
