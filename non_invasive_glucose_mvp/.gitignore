@@ -1,0 +1,23 @@
+# Python Virtual Environment
+venv/
+ENV/
+env/
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Output Artifacts (keep cleaned_features.csv or gitignore model binaries)
+artifacts/*.pkl
+artifacts/*.png
+!artifacts/.gitkeep
