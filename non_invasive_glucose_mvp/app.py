@@ -100,7 +100,7 @@ st.markdown(
     }
     </style>
     """,
-    unsafe_allow_allow_html=True if hasattr(st, "markdown") else None,
+    unsafe_allow_html=True,
 )
 
 
@@ -192,6 +192,7 @@ if use_calibration:
 sig_df = None
 selected_meta = None
 estimated_glucose = None
+raw_pred = None
 ref_glucose = None
 
 if mode == "Select Dataset Subject" and subject_id is not None:
@@ -356,7 +357,7 @@ with tab2:
 
         st.plotly_chart(fig_ceg, use_container_width=True)
 
-        zone_percentages, _ = evaluate_clarke_error_grid(y_all_true, y_all_pred)
+        zone_percentages, _ = evaluate_clarke_error_grid(np.asarray(y_all_true, dtype=float), np.asarray(y_all_pred, dtype=float))
         col_z1, col_z2, col_z3 = st.columns(3)
         col_z1.metric("Zone A (Accurate)", f"{zone_percentages['A']:.1f}%")
         col_z2.metric("Zone B (Benign)", f"{zone_percentages['B']:.1f}%")
@@ -371,7 +372,7 @@ with tab3:
     st.subheader("Model Interpretability & Feature Contributions")
     shap_summary_path = ARTIFACTS_DIR / "shap_summary.png"
     if shap_summary_path.exists():
-        st.image(str(shap_summary_path), caption="SHAP Summary Plot - Feature Importances", use_column_width=True)
+        st.image(str(shap_summary_path), caption="SHAP Summary Plot - Feature Importances", use_container_width=True)
     else:
         st.info("SHAP Summary Plot will appear here after running `python run_pipeline.py`.")
 
@@ -385,7 +386,7 @@ with tab4:
         "Providing a single reference blood glucose measurement anchors the baseline optical absorption curve."
     )
 
-    if estimated_glucose is not None and ref_glucose is not None:
+    if estimated_glucose is not None and ref_glucose is not None and raw_pred is not None:
         col_c1, col_c2 = st.columns(2)
         with col_c1:
             st.metric("Raw Uncalibrated Estimate", f"{raw_pred:.1f} mg/dL", delta=f"{raw_pred - ref_glucose:.1f} Error")
