@@ -51,8 +51,7 @@ st.set_page_config(
 )
 
 # Custom CSS for dark/modern glassmorphism UI
-st.markdown(
-    """
+CSS_STYLE = """
     <style>
     .main-header {
         font-size: 2.2rem;
@@ -99,9 +98,9 @@ st.markdown(
         font-size: 1.1rem;
     }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+"""
+st.markdown(CSS_STYLE, unsafe_allow_html=True)
+
 
 
 @st.cache_data
