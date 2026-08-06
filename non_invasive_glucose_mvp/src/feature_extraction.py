@@ -174,12 +174,22 @@ def extract_channel_morphology(
     d_m = np.mean(apg_d_list) if apg_d_list else 0.0
     e_m = np.mean(apg_e_list) if apg_e_list else 0.0
 
+    features["apg_a_mean"] = float(a_m)
+    features["apg_b_mean"] = float(b_m)
+    features["apg_c_mean"] = float(c_m)
+    features["apg_d_mean"] = float(d_m)
+    features["apg_e_mean"] = float(e_m)
+
     denom_a = a_m if abs(a_m) > 1e-8 else 1.0
     features["apg_b_over_a"] = float(b_m / denom_a)
     features["apg_c_over_a"] = float(c_m / denom_a)
     features["apg_d_over_a"] = float(d_m / denom_a)
     features["apg_e_over_a"] = float(e_m / denom_a)
     features["apg_aging_index"] = float((b_m - c_m - d_m - e_m) / denom_a)
+
+    # Accelerated PPG (APPG 2nd-derivative) vascular compliance & reflection index features
+    features["b_a_ratio"] = float(b_m / (abs(a_m) + 1e-6))
+    features["reflection_index"] = float(1.0 / (features["area_ratio_mean"] + 1e-6))
 
     return features
 
@@ -190,7 +200,8 @@ def compute_optical_ratios(
 ) -> Dict[str, float]:
     """
     Computes AC (peak-to-trough amplitude) and DC (mean baseline intensity)
-    per channel, and extracts cross-wavelength optical absorption R-values.
+    per channel, extracts cross-wavelength optical absorption R-values,
+    and calculates Hb-specific attenuation & optical ratio features.
     """
     ac_dc_per_channel = {}
     ratios = {}
@@ -200,7 +211,7 @@ def compute_optical_ratios(
         filt_sig = filtered_signal_df[ch].to_numpy()
 
         dc = np.mean(raw_sig)
-        if dc == 0:
+        if abs(dc) < 1e-8:
             dc = 1e-8
 
         # AC amplitude: 95th percentile minus 5th percentile of filtered pulse
@@ -228,6 +239,33 @@ def compute_optical_ratios(
         denom = val2 if abs(val2) > 1e-8 else 1e-8
         ratios[f"R_{ch1}_{ch2}"] = float(val1 / denom)
 
+    # --------------------------------------------------------------------------
+    # Hemoglobin-Specific (Hb) Optical & Attenuation Features
+    # --------------------------------------------------------------------------
+    # 1. R_660_730 (Deoxy-Hb Transition Ratio)
+    val_660 = ac_dc_per_channel["660nm"]
+    val_730 = ac_dc_per_channel["730nm"]
+    ratios["R_660_730"] = float(val_660 / np.maximum(abs(val_730), 1e-8))
+
+    # 2. R_730_940 (Total Hb vs Dermal Fluid Ratio)
+    val_940 = ac_dc_per_channel["940nm"]
+    ratios["R_730_940"] = float(val_730 / np.maximum(abs(val_940), 1e-8))
+
+    # 3. Hb_Decoupling_Factor (HDF = R_660_940 / R_730_850)
+    r_660_940 = ratios["R_660nm_940nm"]
+    r_730_850 = ratios["R_730nm_850nm"]
+    ratios["Hb_Decoupling_Factor"] = float(r_660_940 / np.maximum(abs(r_730_850), 1e-8))
+
+    # 4. THAI_index (Total Hemoglobin Absorption Index = (DC_660 + DC_730) / (DC_850 + DC_940))
+    dc_660 = ratios["DC_660nm"]
+    dc_730 = ratios["DC_730nm"]
+    dc_850 = ratios["DC_850nm"]
+    dc_940 = ratios["DC_940nm"]
+    ratios["THAI_index"] = float((dc_660 + dc_730) / np.maximum(abs(dc_850 + dc_940), 1e-8))
+
+    # 5. PI_730nm (730nm Perfusion Index = (AC_730 / DC_730) * 100)
+    ratios["PI_730nm"] = float(val_730 * 100.0)
+
     return ratios
 
 
@@ -238,7 +276,7 @@ def extract_features_for_subject(
     fs: float = SAMPLING_FREQ
 ) -> Dict[str, float]:
     """
-    Pipeline to extract all morphological, derivative, optical, and demographic features for one subject.
+    Pipeline to extract all morphological, derivative, optical, demographic, and Hb-specific features for one subject.
     """
     proc = preprocess_subject_signals(raw_signal_df, fs=fs)
 
@@ -257,7 +295,7 @@ def extract_features_for_subject(
     # Target Blood Glucose
     feature_dict[TARGET_COLUMN] = float(meta_row[TARGET_COLUMN])
 
-    # Multi-wavelength optical density ratios
+    # Multi-wavelength optical density ratios & Hb optical features
     optical_ratios = compute_optical_ratios(proc["raw"], proc["filtered"])
     feature_dict.update(optical_ratios)
 
@@ -272,7 +310,20 @@ def extract_features_for_subject(
         for fname, fval in ch_features.items():
             feature_dict[f"{ch}_{fname}"] = fval
 
+    # --------------------------------------------------------------------------
+    # Acceleration PPG Dynamics (730nm APG Hemoglobin Features)
+    # --------------------------------------------------------------------------
+    a_730 = feature_dict.get("730nm_apg_a_mean", 1.0)
+    b_730 = feature_dict.get("730nm_apg_b_mean", 0.0)
+    d_730 = feature_dict.get("730nm_apg_d_mean", 0.0)
+    pi_730 = feature_dict.get("PI_730nm", 0.0)
+
+    denom_a730 = np.maximum(abs(a_730), 1e-8)
+    feature_dict["Hb_Viscosity_Index"] = float((abs(b_730) / denom_a730) * pi_730)
+    feature_dict["Microvascular_Resistance_Index"] = float((b_730 - d_730) / denom_a730)
+
     return feature_dict
+
 
 
 def build_feature_dataset(
@@ -280,25 +331,43 @@ def build_feature_dataset(
     signals_dict: Dict[int, pd.DataFrame],
     save_csv: bool = True,
     output_path: Path = CLEANED_FEATURES_PATH,
+    window_size_sec: float = 10.0,
+    step_sec: float = 5.0,
 ) -> pd.DataFrame:
     """
-    Iterates across all valid subjects, runs feature extraction, constructs feature DataFrame,
+    Iterates across all valid subjects, runs multi-window feature extraction,
+    applies Subject-Wise Delta Feature Standardization, constructs feature DataFrame,
     and exports artifacts/cleaned_features.csv.
     """
+    from src.preprocessor import transform_subject_delta_features
+
     extracted_rows = []
+    window_samples = int(window_size_sec * SAMPLING_FREQ)
+    step_samples = int(step_sec * SAMPLING_FREQ)
 
     for _, meta_row in metadata_df.iterrows():
         sub_id = int(meta_row["ID"])
         if sub_id in signals_dict:
             raw_sig = signals_dict[sub_id]
-            subj_features = extract_features_for_subject(sub_id, raw_sig, meta_row)
-            extracted_rows.append(subj_features)
+            n_samples = len(raw_sig)
+            if n_samples >= window_samples:
+                for start in range(0, n_samples - window_samples + 1, step_samples):
+                    win_df = raw_sig.iloc[start : start + window_samples].reset_index(drop=True)
+                    subj_features = extract_features_for_subject(sub_id, win_df, meta_row)
+                    extracted_rows.append(subj_features)
+            else:
+                subj_features = extract_features_for_subject(sub_id, raw_sig, meta_row)
+                extracted_rows.append(subj_features)
 
     features_df = pd.DataFrame(extracted_rows)
+
+    # Apply Subject-Wise Feature Standardization & Delta Transformation
+    features_df, _ = transform_subject_delta_features(features_df)
 
     if save_csv:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         features_df.to_csv(output_path, index=False)
-        print(f"[FeatureExtraction] Features matrix saved to: {output_path} (Shape: {features_df.shape})")
+        print(f"[FeatureExtraction] Subject Delta Features matrix saved to: {output_path} (Shape: {features_df.shape})")
 
     return features_df
+

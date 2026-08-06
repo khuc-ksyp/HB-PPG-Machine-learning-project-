@@ -45,6 +45,27 @@ def assign_clarke_zone(y_ref: float, y_pred: float) -> str:
     return "B"
 
 
+def evaluate_iso_15197_compliance(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    Evaluates AAMI / ISO 15197 clinical accuracy compliance rate (%):
+      - For reference blood glucose < 100 mg/dL: prediction is compliant if |y_pred - y_true| <= 15 mg/dL.
+      - For reference blood glucose >= 100 mg/dL: prediction is compliant if |y_pred - y_true| / y_true <= 0.15 (15%).
+    Returns compliance percentage (0.0 to 100.0%).
+    """
+    true_arr = np.asarray(y_true, dtype=float)
+    pred_arr = np.asarray(y_pred, dtype=float)
+    abs_diff = np.abs(pred_arr - true_arr)
+
+    mask_low = true_arr < 100.0
+    mask_high = true_arr >= 100.0
+
+    comp_low = abs_diff[mask_low] <= 15.0 if np.any(mask_low) else np.array([])
+    comp_high = (abs_diff[mask_high] / true_arr[mask_high]) <= 0.15 if np.any(mask_high) else np.array([])
+
+    all_comp = np.concatenate([comp_low, comp_high])
+    return float(np.mean(all_comp) * 100.0) if len(all_comp) > 0 else 0.0
+
+
 def evaluate_clarke_error_grid(
     y_true: np.ndarray, y_pred: np.ndarray
 ) -> Tuple[Dict[str, float], List[str]]:
@@ -58,6 +79,7 @@ def evaluate_clarke_error_grid(
     zone_percentages = {z: (cnt / total) * 100.0 for z, cnt in zone_counts.items()}
 
     zone_percentages["A_B_Combined"] = zone_percentages["A"] + zone_percentages["B"]
+    zone_percentages["ISO_15197_Compliance"] = evaluate_iso_15197_compliance(y_true, y_pred)
     return zone_percentages, zones
 
 

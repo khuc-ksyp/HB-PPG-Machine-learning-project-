@@ -7,7 +7,6 @@ Features:
   - Estimated glucose display with clinical risk category badges (Hypo / Normal / Hyper).
   - Interactive Clarke Error Grid scatter plot highlighting selected subject.
   - SHAP feature contribution analysis.
-  - 1-Point Personalization Calibration simulation.
 """
 
 import sys
@@ -40,7 +39,6 @@ from src.data_ingestion import load_metadata_excel, clean_and_impute_metadata, l
 from src.signal_processing import preprocess_subject_signals
 from src.feature_extraction import extract_features_for_subject
 from src.clinical_evaluator import assign_clarke_zone, evaluate_clarke_error_grid
-from src.calibration import apply_one_point_calibration
 
 
 st.set_page_config(
@@ -176,13 +174,7 @@ else:
             custom_signal_df = custom_signal_df.iloc[:, :4]
             custom_signal_df.columns = CHANNEL_NAMES
 
-# Personalization Calibration Toggle
-st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 1-Point Personalization Calibration")
-use_calibration = st.sidebar.checkbox("Enable 1-Point Offset Calibration", value=False)
-custom_ref_glucose = None
-if use_calibration:
-    custom_ref_glucose = st.sidebar.number_input("Invasive Reference Glucose (mg/dL)", min_value=40.0, max_value=400.0, value=110.0, step=1.0)
+
 
 
 # ==============================================================================
@@ -218,16 +210,22 @@ elif mode == "Upload PPG CSV File" and custom_signal_df is not None:
 if sig_df is not None and model is not None and selected_meta is not None:
     feat_dict = extract_features_for_subject(int(selected_meta["ID"]), sig_df, selected_meta)
     feat_df = pd.DataFrame([feat_dict])
-    
+
+    from src.preprocessor import transform_subject_delta_features
+    feat_df, _ = transform_subject_delta_features(feat_df)
+
     drop_cols = [c for c in [TARGET_COLUMN, GROUP_CV_COLUMN] if c in feat_df.columns]
     X_single = feat_df.drop(columns=drop_cols)
-    
+
+    # Align columns with trained model if feature_names_in_ is present
+    if hasattr(model, "feature_names_in_"):
+        for col in model.feature_names_in_:
+            if col not in X_single.columns:
+                X_single[col] = 0.0
+        X_single = X_single[model.feature_names_in_]
+
     raw_pred = float(model.predict(X_single)[0])
-    
-    if use_calibration and custom_ref_glucose is not None:
-        estimated_glucose = apply_one_point_calibration(np.array([raw_pred]), custom_ref_glucose, index=0)[0]
-    else:
-        estimated_glucose = raw_pred
+    estimated_glucose = raw_pred
 
 # ==============================================================================
 # MAIN DISPLAY: ESTIMATED GLUCOSE METRICS BADGE
@@ -252,7 +250,7 @@ if estimated_glucose is not None:
         if ref_glucose is not None:
             st.metric("Invasive Reference Glucose", f"{ref_glucose:.1f} mg/dL")
         else:
-            st.metric("Calibration Mode", "1-Point Enabled" if use_calibration else "Uncalibrated")
+            st.metric("Invasive Reference Glucose", "N/A")
     with col_m3:
         st.markdown(f"**Clinical Status**<br>{badge_html}", unsafe_allow_html=True)
     with col_m4:
@@ -264,11 +262,10 @@ st.markdown("---")
 # ==============================================================================
 # TAB NAVIGATION
 # ==============================================================================
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "📈 Interactive PPG Waveforms",
     "🎯 Clarke Error Grid Clinical Safety",
-    "🔍 SHAP Feature Interpretability",
-    "⚙️ Personalization Calibration"
+    "🔍 SHAP Feature Interpretability"
 ])
 
 # ------------------------------------------------------------------------------
@@ -375,19 +372,4 @@ with tab3:
     else:
         st.info("SHAP Summary Plot will appear here after running `python run_pipeline.py`.")
 
-# ------------------------------------------------------------------------------
-# TAB 4: 1-POINT CALIBRATION DEMO
-# ------------------------------------------------------------------------------
-with tab4:
-    st.subheader("1-Point Personalization Offset Calibration Simulation")
-    st.write(
-        "Individual optical properties (skin tone, epidermal thickness, vascular tone) introduce static baseline offsets. "
-        "Providing a single reference blood glucose measurement anchors the baseline optical absorption curve."
-    )
 
-    if estimated_glucose is not None and ref_glucose is not None and raw_pred is not None:
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            st.metric("Raw Uncalibrated Estimate", f"{raw_pred:.1f} mg/dL", delta=f"{raw_pred - ref_glucose:.1f} Error")
-        with col_c2:
-            st.metric("1-Point Calibrated Estimate", f"{estimated_glucose:.1f} mg/dL", delta=f"{estimated_glucose - ref_glucose:.1f} Error")
