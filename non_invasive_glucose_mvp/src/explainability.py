@@ -67,8 +67,8 @@ def generate_shap_analysis(
     }).sort_values(by="Mean_Abs_SHAP", ascending=False).reset_index(drop=True)
 
     print("\n--- TOP 5 MOST IMPACTFUL OPTICAL & PHYSIOLOGICAL FEATURES ---")
-    for idx, row in top_features_df.head(5).iterrows():
-        print(f"  {idx+1}. {row['Feature']}: {row['Mean_Abs_SHAP']:.4f}")
+    for i, (_, row) in enumerate(top_features_df.head(5).iterrows(), start=1):
+        print(f"  {i}. {row['Feature']}: {row['Mean_Abs_SHAP']:.4f}")
     print("-------------------------------------------------------------\n")
 
     # Generate and save SHAP Summary Plot
