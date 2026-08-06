@@ -93,7 +93,7 @@ def run_pipeline():
     X_matrix = reduced_df[feature_cols]
 
     # For SHAP analysis, use underlying ridge model inside ensemble
-    shap_model = ensemble_model.ridge_model if hasattr(ensemble_model, "ridge_model") else ensemble_model
+    shap_model = ensemble_model.models_dict["Ridge"] if hasattr(ensemble_model, "models_dict") and "Ridge" in ensemble_model.models_dict else ensemble_model
     _, top_features_df = generate_shap_analysis(
         model=shap_model,
         X_train=X_matrix,

@@ -1,7 +1,7 @@
 """
 Model Training, Cross-Validation, Hyperparameter Optimization, and Metric Evaluation Engine.
 Uses GroupKFold splits on Subject ID to prevent data leakage.
-Implements Log-Target Optimization (z = ln(y)) and Non-Negative Stacking Meta-Learner.
+Implements Log-Target Optimization (z = ln(y)), Base Model Pruning, and MARD-Direct Loss Optimization.
 """
 
 from pathlib import Path
@@ -9,6 +9,7 @@ from typing import Dict, Any, Tuple, List
 import joblib
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 from sklearn.linear_model import Ridge, HuberRegressor, ElasticNet
 from sklearn.svm import SVR
 from sklearn.preprocessing import StandardScaler
@@ -27,49 +28,57 @@ from src.config import (
 from src.clinical_evaluator import evaluate_iso_15197_compliance, evaluate_clarke_error_grid
 
 
-class NonNegativeStackedEnsemblePipeline:
+def mard_loss_function(weights: np.ndarray, z_matrix: np.ndarray, y_true: np.ndarray) -> float:
     """
-    Production wrapper for Log-Target Base Models + Non-Negative Stacking Meta-Learner.
-    Base models predict z = ln(y), meta-learner blends z_base, and final prediction = exp(z_stacked).
+    Direct MARD Loss Objective Function:
+    Loss(w) = (1/N) * sum( |y_i - exp( sum_m w_m * z_{i,m} )| / y_i ) * 100
     """
-    def __init__(self, ridge_model: Any, huber_model: Any, svr_model: Any, lgbm_model: Any, meta_model: Any):
-        self.ridge_model = ridge_model
-        self.huber_model = huber_model
-        self.svr_model = svr_model
-        self.lgbm_model = lgbm_model
-        self.meta_model = meta_model
+    z_blend = np.dot(z_matrix, weights)
+    y_pred = np.exp(z_blend)
+    return float(np.mean(np.abs(y_true - y_pred) / y_true) * 100.0)
 
-        if hasattr(ridge_model, "feature_names_in_"):
-            self.feature_names_in_ = ridge_model.feature_names_in_
 
-    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "NonNegativeStackedEnsemblePipeline":
+class MARDOptimizedEnsemblePipeline:
+    """
+    Production wrapper for Log-Target Base Models + MARD-Direct Loss SLSQP Meta-Learner.
+    Predicts y = exp( sum_m w_m * z_{base, m} ).
+    """
+    def __init__(self, models_dict: Dict[str, Any], weights_dict: Dict[str, float]):
+        self.models_dict = models_dict
+        self.weights_dict = weights_dict
+        self.model_names = list(models_dict.keys())
+        self.weights_arr = np.array([weights_dict[m] for m in self.model_names])
+
+        first_m = list(models_dict.values())[0]
+        if hasattr(first_m, "feature_names_in_"):
+            self.feature_names_in_ = first_m.feature_names_in_
+
+    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "MARDOptimizedEnsemblePipeline":
         z = np.log(y)
-        self.ridge_model.fit(X, z)
-        self.huber_model.fit(X, z)
-        self.svr_model.fit(X, z)
-        self.lgbm_model.fit(X, z)
+        z_cols = []
+        for name, m in self.models_dict.items():
+            m.fit(X, z)
+            z_cols.append(m.predict(X))
 
-        z_matrix = np.column_stack([
-            self.ridge_model.predict(X),
-            self.huber_model.predict(X),
-            self.svr_model.predict(X),
-            self.lgbm_model.predict(X),
-        ])
-        self.meta_model.fit(z_matrix, z)
+        z_mat = np.column_stack(z_cols)
+        n_m = len(self.model_names)
+        init_w = np.ones(n_m) / n_m
+        bounds = [(0.0, 1.0) for _ in range(n_m)]
+        constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
+
+        res = minimize(mard_loss_function, init_w, args=(z_mat, y), method='SLSQP', bounds=bounds, constraints=constraints)
+        self.weights_arr = res.x
+        self.weights_dict = dict(zip(self.model_names, self.weights_arr))
 
         if hasattr(X, "columns"):
             self.feature_names_in_ = np.array(X.columns)
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        z_preds = np.column_stack([
-            self.ridge_model.predict(X),
-            self.huber_model.predict(X),
-            self.svr_model.predict(X),
-            self.lgbm_model.predict(X),
-        ])
-        z_stacked = self.meta_model.predict(z_preds)
-        return np.exp(z_stacked)
+        z_cols = [self.models_dict[m].predict(X) for m in self.model_names]
+        z_mat = np.column_stack(z_cols)
+        z_blend = np.dot(z_mat, self.weights_arr)
+        return np.exp(z_blend)
 
 
 def calculate_mard(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -111,25 +120,25 @@ def train_and_benchmark_models(
     seed: int = RANDOM_SEED,
 ) -> Tuple[Dict[str, Dict[str, float]], Any, np.ndarray, np.ndarray]:
     """
-    Executes Log-Target Optimization (z = ln(y)) and Non-Negative Meta-Learner Stacking:
+    Executes Log-Target Optimization (z = ln(y)), Base Model MARD Pruning, and MARD-Direct Loss Meta-Optimization:
       1. Ridge (CV tuned alpha in [0.1, 1.0, 10.0, 100.0])
       2. HuberRegressor
       3. SVR_Linear (kernel="linear", C=1.0, epsilon=0.01)
       4. SVR_RBF (kernel="rbf", C=1.0, epsilon=0.01)
       5. ElasticNet (alpha=0.1, l1_ratio=0.5)
       6. LightGBM_Tuned
-      7. Stacked_Ensemble (Ridge positive=True meta-learner)
+      7. MARD_Opt_Ensemble (SciPy SLSQP direct MARD loss minimization)
     """
     drop_cols = [target_col, group_col]
     feature_cols = [c for c in df.columns if c not in drop_cols]
 
     X = df[feature_cols].copy()
     y = df[target_col].to_numpy()
-    z = np.log(y)  # Log-space target transformation
+    z = np.log(y)
     groups = df[group_col].to_numpy()
     gkf = GroupKFold(n_splits=n_splits)
 
-    # 1. Tune Ridge Alpha in Log Space via CV in [0.1, 1.0, 10.0, 100.0]
+    # 1. Tune Ridge Alpha in Log Space
     ridge_grid = GridSearchCV(
         estimator=Ridge(random_state=seed),
         param_grid={"alpha": [0.1, 1.0, 10.0, 50.0, 100.0]},
@@ -174,7 +183,6 @@ def train_and_benchmark_models(
             val_z_pred = model.predict(X_val)
 
             oof_preds_log[name][val_idx] = val_z_pred
-            # Evaluate train R2 on exponentiated glucose scale
             tr_y_pred = np.exp(tr_z_pred)
             train_r2_scores[name].append(r2_score(y[train_idx], tr_y_pred))
 
@@ -185,50 +193,52 @@ def train_and_benchmark_models(
         overall_metrics["Gap"] = overall_metrics["Train_R2"] - overall_metrics["Test_OOF_R2"]
         benchmark_results[name] = overall_metrics
 
-    # 2. Fit Non-Negative Ridge Stacking Meta-Learner
-    meta_base_names = ["Ridge", "Huber", "SVR_Linear", "LightGBM_Tuned"]
-    meta_X_oof = np.column_stack([oof_preds_log[m] for m in meta_base_names])
+    # 2. Base Model Pruning: Retain candidate models with OOF MARD <= 10.20% (always keep top linear models)
+    retained_models = [m for m in candidate_models.keys() if benchmark_results[m]["MARD"] <= 10.20 or m in ["Ridge", "Huber", "SVR_Linear"]]
+    print(f"[ModelTrainer] Retained Base Models for MARD Meta-Stacking: {retained_models}")
 
-    meta_ridge = Ridge(alpha=1.0, positive=True, fit_intercept=False, random_state=seed)
-    meta_ridge.fit(meta_X_oof, z)
-    learned_weights = meta_ridge.coef_
-    print(f"[ModelTrainer] Non-Negative Meta-Stacking Weights: {dict(zip(meta_base_names, np.round(learned_weights, 4)))}")
+    meta_X_oof = np.column_stack([oof_preds_log[m] for m in retained_models])
+    n_m = len(retained_models)
+    init_w = np.ones(n_m) / n_m
+    bounds = [(0.0, 1.0) for _ in range(n_m)]
+    constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
 
-    oof_z_stacked = meta_ridge.predict(meta_X_oof)
-    oof_y_stacked = np.exp(oof_z_stacked)
+    res = minimize(mard_loss_function, init_w, args=(meta_X_oof, y), method='SLSQP', bounds=bounds, constraints=constraints)
+    learned_weights = dict(zip(retained_models, np.round(res.x, 4)))
+    print(f"[ModelTrainer] MARD-Optimized Meta Weights: {learned_weights}")
 
-    # Compute GroupKFold train R2 for Stacked Ensemble
-    stacked_tr_r2_list = []
+    oof_z_opt = np.dot(meta_X_oof, res.x)
+    oof_y_opt = np.exp(oof_z_opt)
+
+    # Compute GroupKFold train R2 for MARD-Optimized Ensemble
+    opt_tr_r2_list = []
     for fold, (train_idx, val_idx) in enumerate(gkf.split(X, z, groups=groups)):
         X_train, z_train = X.iloc[train_idx], z[train_idx]
         tr_z_mat = []
-        for m_name in meta_base_names:
+        for m_name in retained_models:
             m_inst = candidate_models[m_name]
             m_inst.fit(X_train, z_train)
             tr_z_mat.append(m_inst.predict(X_train))
         tr_z_matrix = np.column_stack(tr_z_mat)
-        m_meta = Ridge(alpha=1.0, positive=True, fit_intercept=False, random_state=seed)
-        m_meta.fit(tr_z_matrix, z_train)
-        tr_y_st = np.exp(m_meta.predict(tr_z_matrix))
-        stacked_tr_r2_list.append(r2_score(y[train_idx], tr_y_st))
+        res_fold = minimize(mard_loss_function, init_w, args=(tr_z_matrix, y[train_idx]), method='SLSQP', bounds=bounds, constraints=constraints)
+        tr_y_st = np.exp(np.dot(tr_z_matrix, res_fold.x))
+        opt_tr_r2_list.append(r2_score(y[train_idx], tr_y_st))
 
-    stacked_metrics = evaluate_predictions(y, oof_y_stacked)
-    stacked_metrics["Train_R2"] = float(np.mean(stacked_tr_r2_list))
-    stacked_metrics["Test_OOF_R2"] = stacked_metrics["R2"]
-    stacked_metrics["Gap"] = stacked_metrics["Train_R2"] - stacked_metrics["Test_OOF_R2"]
-    benchmark_results["Stacked_Ensemble"] = stacked_metrics
+    opt_metrics = evaluate_predictions(y, oof_y_opt)
+    opt_metrics["Train_R2"] = float(np.mean(opt_tr_r2_list))
+    opt_metrics["Test_OOF_R2"] = opt_metrics["R2"]
+    opt_metrics["Gap"] = opt_metrics["Train_R2"] - opt_metrics["Test_OOF_R2"]
+    benchmark_results["MARD_Opt_Ensemble"] = opt_metrics
 
-    # 3. Train final NonNegativeStackedEnsemblePipeline on entire dataset
-    ensemble_pipeline = NonNegativeStackedEnsemblePipeline(
-        ridge_model=candidate_models["Ridge"],
-        huber_model=candidate_models["Huber"],
-        svr_model=candidate_models["SVR_Linear"],
-        lgbm_model=candidate_models["LightGBM_Tuned"],
-        meta_model=meta_ridge,
+    # 3. Fit final MARDOptimizedEnsemblePipeline on full dataset
+    retained_dict = {m: candidate_models[m] for m in retained_models}
+    ensemble_pipeline = MARDOptimizedEnsemblePipeline(
+        models_dict=retained_dict,
+        weights_dict=learned_weights,
     )
     ensemble_pipeline.fit(X, y)
 
-    return benchmark_results, ensemble_pipeline, y, oof_y_stacked
+    return benchmark_results, ensemble_pipeline, y, oof_y_opt
 
 
 def save_model(model: Any, path: Path = MODEL_SAVE_PATH) -> None:

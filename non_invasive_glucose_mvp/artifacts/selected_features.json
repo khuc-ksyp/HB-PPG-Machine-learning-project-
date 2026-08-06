@@ -3,14 +3,14 @@
   "Hemoglobin",
   "Height",
   "BMI",
-  "Weight",
   "R_660nm_850nm",
-  "850nm_kurtosis",
+  "Weight",
   "730nm_reflection_index",
-  "Gender_male",
-  "660nm_kurtosis",
+  "850nm_kurtosis",
   "R_660nm_730nm",
+  "Gender_male",
   "AC_DC_940nm",
+  "660nm_kurtosis",
   "940nm_kurtosis",
-  "AC_940nm"
+  "THAI_index"
 ]

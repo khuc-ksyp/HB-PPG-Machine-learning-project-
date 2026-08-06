@@ -311,7 +311,7 @@ def extract_features_for_subject(
             feature_dict[f"{ch}_{fname}"] = fval
 
     # --------------------------------------------------------------------------
-    # Acceleration PPG Dynamics (730nm APG Hemoglobin Features)
+    # Acceleration PPG Dynamics (730nm APG Hemoglobin & Cross-Ratio Features)
     # --------------------------------------------------------------------------
     a_730 = feature_dict.get("730nm_apg_a_mean", 1.0)
     b_730 = feature_dict.get("730nm_apg_b_mean", 0.0)
@@ -321,6 +321,14 @@ def extract_features_for_subject(
     denom_a730 = np.maximum(abs(a_730), 1e-8)
     feature_dict["Hb_Viscosity_Index"] = float((abs(b_730) / denom_a730) * pi_730)
     feature_dict["Microvascular_Resistance_Index"] = float((b_730 - d_730) / denom_a730)
+
+    # Cross-Wavelength APPG Ratios
+    b_660 = feature_dict.get("660nm_apg_b_mean", 0.0)
+    b_940 = feature_dict.get("940nm_apg_b_mean", 0.0)
+    a_850 = feature_dict.get("850nm_apg_a_mean", 1.0)
+
+    feature_dict["APPG_Ratio_660_940"] = float(b_660 / (abs(b_940) + 1e-6))
+    feature_dict["APPG_Ratio_730_850"] = float(a_730 / (abs(a_850) + 1e-6))
 
     return feature_dict
 
