@@ -288,8 +288,7 @@ with tab1:
         time_sec = np.arange(len(sig_df)) / SAMPLING_FREQ
 
         raw_ac = proc["filtered"][show_channel].iloc[:1000].to_numpy()
-        detrended_ac = detrend(raw_ac)
-        display_ac_signal = -1.0 * detrended_ac
+        display_ac_signal = detrend(raw_ac)
 
         fig_wave = make_subplots(specs=[[{"secondary_y": True}]])
         fig_wave.add_trace(
@@ -307,20 +306,20 @@ with tab1:
                 x=time_sec[:1000],
                 y=display_ac_signal,
                 mode="lines",
-                name=f"Bandpass Filtered AC (Inverted)",
+                name=f"Bandpass Filtered AC (0.5–4.0 Hz)",
                 line=dict(color="#00E676", width=2.5),
             ),
             secondary_y=True,
         )
         fig_wave.update_layout(
-            title=f"Raw Intensity vs. Inverted & Detrended Filtered PPG Signal ({show_channel})",
+            title=f"Raw Intensity vs. Smooth Zero-Phase Filtered PPG Waveform ({show_channel})",
             xaxis_title="Time (seconds)",
             template="plotly_dark",
             height=440,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         fig_wave.update_yaxes(title_text="Raw Signal Intensity (a.u.)", secondary_y=False)
-        fig_wave.update_yaxes(title_text="Relative Pulse Amplitude (Inverted AC, a.u.)", secondary_y=True)
+        fig_wave.update_yaxes(title_text="Pulsatile Signal Amplitude (AC, a.u.)", secondary_y=True)
 
         st.plotly_chart(fig_wave, use_container_width=True)
     else:

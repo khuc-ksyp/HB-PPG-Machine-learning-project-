@@ -7,7 +7,7 @@ z-score normalization, derivative computation (VPG/APG), and peak/trough detecti
 from typing import Tuple, Dict
 import numpy as np
 import pandas as pd
-from scipy.signal import butter, filtfilt, find_peaks
+from scipy.signal import butter, filtfilt, find_peaks, savgol_filter
 
 from src.config import (
     SAMPLING_FREQ,
@@ -121,8 +121,11 @@ def preprocess_subject_signals(
     """
     raw_array = signal_df[CHANNEL_NAMES].to_numpy()
 
-    # Step 1: Filter
+    # Step 1: Filter & Smooth
     filtered_array = butter_bandpass_filter(raw_array, fs=fs)
+    n_samp = filtered_array.shape[0]
+    if n_samp >= 15:
+        filtered_array = savgol_filter(filtered_array, window_length=15, polyorder=2, axis=0)
     filtered_df = pd.DataFrame(filtered_array, columns=CHANNEL_NAMES)
 
     # Step 2: Normalize

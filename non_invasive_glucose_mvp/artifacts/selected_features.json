@@ -5,12 +5,12 @@
   "BMI",
   "R_660nm_850nm",
   "Weight",
-  "730nm_reflection_index",
   "850nm_kurtosis",
-  "R_660nm_730nm",
-  "Gender_male",
+  "AC_850nm",
   "AC_DC_940nm",
-  "660nm_kurtosis",
-  "940nm_kurtosis",
-  "THAI_index"
+  "Gender_male",
+  "660nm_ppi_std",
+  "R_660nm_730nm",
+  "THAI_index",
+  "940nm_kurtosis"
 ]

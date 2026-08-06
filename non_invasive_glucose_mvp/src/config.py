@@ -26,8 +26,8 @@ CLARKE_GRID_PLOT_PATH = ARTIFACTS_DIR / "clarke_error_grid.png"
 # Signal Processing Parameters
 SAMPLING_FREQ = 200.0  # Hz
 BANDPASS_LOW = 0.5     # Hz
-BANDPASS_HIGH = 8.0    # Hz
-FILTER_ORDER = 4
+BANDPASS_HIGH = 4.0    # Hz
+FILTER_ORDER = 2
 
 # Optical Wavelength Channels (nm)
 WAVELENGTHS = [660, 730, 850, 940]
