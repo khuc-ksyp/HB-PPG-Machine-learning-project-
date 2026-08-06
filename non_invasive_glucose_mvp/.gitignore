@@ -21,3 +21,8 @@ Thumbs.db
 artifacts/*.pkl
 artifacts/*.png
 !artifacts/.gitkeep
+
+# Archives & Compressed Files
+*.zip
+../*.zip
+
