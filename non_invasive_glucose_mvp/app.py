@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from src.config import (
@@ -74,26 +75,32 @@ CSS_STYLE = """
     .metric-badge-normal {
         background-color: #2e7d32;
         color: white;
-        padding: 6px 14px;
-        border-radius: 20px;
+        padding: 5px 12px;
+        border-radius: 16px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 0.9rem;
+        display: inline-block;
+        white-space: nowrap;
     }
     .metric-badge-hypo {
         background-color: #ed6c02;
         color: white;
-        padding: 6px 14px;
-        border-radius: 20px;
+        padding: 5px 12px;
+        border-radius: 16px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 0.9rem;
+        display: inline-block;
+        white-space: nowrap;
     }
     .metric-badge-hyper {
         background-color: #d32f2f;
         color: white;
-        padding: 6px 14px;
-        border-radius: 20px;
+        padding: 5px 12px;
+        border-radius: 16px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 0.9rem;
+        display: inline-block;
+        white-space: nowrap;
     }
     </style>
 """
@@ -279,28 +286,37 @@ with tab1:
         show_channel = st.selectbox("Select Optical Wavelength Channel", CHANNEL_NAMES, index=0)
         time_sec = np.arange(len(sig_df)) / SAMPLING_FREQ
 
-        fig_wave = go.Figure()
-        fig_wave.add_trace(go.Scatter(
-            x=time_sec[:1000],
-            y=sig_df[show_channel].iloc[:1000],
-            mode="lines",
-            name=f"Raw {show_channel} Intensity",
-            line=dict(color="#90A4AE", width=1.5, dash="dot"),
-        ))
-        fig_wave.add_trace(go.Scatter(
-            x=time_sec[:1000],
-            y=proc["filtered"][show_channel].iloc[:1000],
-            mode="lines",
-            name=f"Bandpass Filtered (0.5–8.0 Hz)",
-            line=dict(color="#1E88E5", width=2.5),
-        ))
+        fig_wave = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_wave.add_trace(
+            go.Scatter(
+                x=time_sec[:1000],
+                y=sig_df[show_channel].iloc[:1000],
+                mode="lines",
+                name=f"Raw {show_channel} Intensity (DC Offset)",
+                line=dict(color="#90A4AE", width=1.5, dash="dot"),
+            ),
+            secondary_y=False,
+        )
+        fig_wave.add_trace(
+            go.Scatter(
+                x=time_sec[:1000],
+                y=proc["filtered"][show_channel].iloc[:1000],
+                mode="lines",
+                name=f"Bandpass Filtered AC (0.5–8.0 Hz)",
+                line=dict(color="#00E676", width=2.5),
+            ),
+            secondary_y=True,
+        )
         fig_wave.update_layout(
             title=f"Raw Intensity vs. Zero-Phase Filtered PPG Signal ({show_channel})",
             xaxis_title="Time (seconds)",
-            yaxis_title="Optical Signal Intensity",
             template="plotly_dark",
-            height=420,
+            height=440,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
+        fig_wave.update_yaxes(title_text="Raw Signal Intensity (a.u.)", secondary_y=False)
+        fig_wave.update_yaxes(title_text="Filtered AC Amplitude (a.u.)", secondary_y=True)
+
         st.plotly_chart(fig_wave, use_container_width=True)
     else:
         st.info("Please select a subject or upload a CSV file from the sidebar to view signals.")
