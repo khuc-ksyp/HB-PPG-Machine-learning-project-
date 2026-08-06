@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import joblib
 import numpy as np
 import pandas as pd
+from scipy.signal import detrend
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -286,6 +287,10 @@ with tab1:
         show_channel = st.selectbox("Select Optical Wavelength Channel", CHANNEL_NAMES, index=0)
         time_sec = np.arange(len(sig_df)) / SAMPLING_FREQ
 
+        raw_ac = proc["filtered"][show_channel].iloc[:1000].to_numpy()
+        detrended_ac = detrend(raw_ac)
+        display_ac_signal = -1.0 * detrended_ac
+
         fig_wave = make_subplots(specs=[[{"secondary_y": True}]])
         fig_wave.add_trace(
             go.Scatter(
@@ -300,22 +305,22 @@ with tab1:
         fig_wave.add_trace(
             go.Scatter(
                 x=time_sec[:1000],
-                y=proc["filtered"][show_channel].iloc[:1000],
+                y=display_ac_signal,
                 mode="lines",
-                name=f"Bandpass Filtered AC (0.5–8.0 Hz)",
+                name=f"Bandpass Filtered AC (Inverted)",
                 line=dict(color="#00E676", width=2.5),
             ),
             secondary_y=True,
         )
         fig_wave.update_layout(
-            title=f"Raw Intensity vs. Zero-Phase Filtered PPG Signal ({show_channel})",
+            title=f"Raw Intensity vs. Inverted & Detrended Filtered PPG Signal ({show_channel})",
             xaxis_title="Time (seconds)",
             template="plotly_dark",
             height=440,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         fig_wave.update_yaxes(title_text="Raw Signal Intensity (a.u.)", secondary_y=False)
-        fig_wave.update_yaxes(title_text="Filtered AC Amplitude (a.u.)", secondary_y=True)
+        fig_wave.update_yaxes(title_text="Relative Pulse Amplitude (Inverted AC, a.u.)", secondary_y=True)
 
         st.plotly_chart(fig_wave, use_container_width=True)
     else:
