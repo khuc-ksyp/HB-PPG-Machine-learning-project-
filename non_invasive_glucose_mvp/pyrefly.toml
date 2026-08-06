@@ -1,0 +1,8 @@
+search-path = [
+  ".",
+  "src"
+]
+site-package-path = [
+  "c:/VT1/non_invasive_glucose_mvp/venv/Lib/site-packages",
+  "C:/Users/kkash/AppData/Local/Python/pythoncore-3.14-64/Lib/site-packages"
+]
