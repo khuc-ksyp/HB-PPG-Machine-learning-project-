@@ -287,7 +287,7 @@ with tab1:
         show_channel = st.selectbox("Select Optical Wavelength Channel", CHANNEL_NAMES, index=0)
         time_sec = np.arange(len(sig_df)) / SAMPLING_FREQ
 
-        raw_ac = proc["filtered"][show_channel].iloc[:1000].to_numpy()
+        raw_ac = np.asarray(proc["filtered"][show_channel].iloc[:1000].values, dtype=float)
         display_ac_signal = detrend(raw_ac)
 
         fig_wave = make_subplots(specs=[[{"secondary_y": True}]])
@@ -333,6 +333,11 @@ with tab2:
     if not features_df.empty and model is not None:
         drop_cols = [c for c in [TARGET_COLUMN, GROUP_CV_COLUMN] if c in features_df.columns]
         X_all = features_df.drop(columns=drop_cols)
+        if hasattr(model, "feature_names_in_"):
+            for c in model.feature_names_in_:
+                if c not in X_all.columns:
+                    X_all[c] = 0.0
+            X_all = X_all[model.feature_names_in_]
         y_all_true = features_df[TARGET_COLUMN].to_numpy()
         y_all_pred = model.predict(X_all)
 

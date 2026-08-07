@@ -32,7 +32,9 @@ def butter_bandpass_filter(
     nyquist = 0.5 * fs
     low = lowcut / nyquist
     high = highcut / nyquist
-    b, a = butter(order, [low, high], btype="band")
+    ba_res = butter(order, [low, high], btype="band")
+    b = np.asarray(ba_res[0])
+    a = np.asarray(ba_res[1])
     
     padlen = 3 * max(len(a), len(b))
     n_samples = len(data) if data.ndim == 1 else data.shape[0]
@@ -42,10 +44,40 @@ def butter_bandpass_filter(
 
     # Apply zero-phase filtering across 1D or 2D arrays
     if data.ndim == 1:
-        filtered = filtfilt(b, a, data)
+        filtered = np.asarray(filtfilt(b, a, data), dtype=float)
     else:
-        filtered = filtfilt(b, a, data, axis=0)
+        filtered = np.asarray(filtfilt(b, a, data, axis=0), dtype=float)
     
+    return filtered
+
+
+def butter_lowpass_filter(
+    data: np.ndarray,
+    cutoff: float = 0.1,
+    fs: float = SAMPLING_FREQ,
+    order: int = 4,
+) -> np.ndarray:
+    """
+    Applies zero-phase 4th-order low-pass Butterworth filter (cutoff=0.1 Hz).
+    Isolates steady-state DC optical baseline intensity without pulsatile AC fluctuations.
+    """
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    ba_res = butter(order, normal_cutoff, btype="low")
+    b = np.asarray(ba_res[0])
+    a = np.asarray(ba_res[1])
+
+    padlen = 3 * max(len(a), len(b))
+    n_samples = len(data) if data.ndim == 1 else data.shape[0]
+
+    if n_samples <= padlen:
+        return data.copy()
+
+    if data.ndim == 1:
+        filtered = np.asarray(filtfilt(b, a, data), dtype=float)
+    else:
+        filtered = np.asarray(filtfilt(b, a, data, axis=0), dtype=float)
+
     return filtered
 
 
@@ -119,13 +151,13 @@ def preprocess_subject_signals(
 
     Returns dictionary containing DataFrames for 'filtered', 'normalized', 'vpg', and 'apg'.
     """
-    raw_array = signal_df[CHANNEL_NAMES].to_numpy()
+    raw_array = np.asarray(signal_df[CHANNEL_NAMES].values, dtype=float)
 
     # Step 1: Filter & Smooth
     filtered_array = butter_bandpass_filter(raw_array, fs=fs)
     n_samp = filtered_array.shape[0]
     if n_samp >= 15:
-        filtered_array = savgol_filter(filtered_array, window_length=15, polyorder=2, axis=0)
+        filtered_array = np.asarray(savgol_filter(filtered_array, window_length=15, polyorder=2, axis=0), dtype=float)
     filtered_df = pd.DataFrame(filtered_array, columns=CHANNEL_NAMES)
 
     # Step 2: Normalize
@@ -136,7 +168,8 @@ def preprocess_subject_signals(
     vpg_dict = {}
     apg_dict = {}
     for col in CHANNEL_NAMES:
-        v, a = compute_derivatives(norm_df[col].to_numpy(), fs=fs)
+        col_arr = np.asarray(norm_df[col].values, dtype=float)
+        v, a = compute_derivatives(col_arr, fs=fs)
         vpg_dict[col] = v
         apg_dict[col] = a
 

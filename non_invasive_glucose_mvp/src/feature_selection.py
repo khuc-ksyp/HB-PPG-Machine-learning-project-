@@ -37,7 +37,8 @@ def filter_collinear_features(
     target_corrs = X.apply(lambda col: float(np.abs(np.corrcoef(col.to_numpy(), y)[0, 1]))).to_dict()
 
     corr_matrix = X.corr().abs()
-    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+    triu_mask = pd.DataFrame(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool), index=corr_matrix.index, columns=corr_matrix.columns)
+    upper = corr_matrix.where(triu_mask)
 
     to_drop = set()
     for col in upper.columns:
@@ -96,7 +97,7 @@ def select_top_features_rfecv(
             selected_indices = np.where(rfecv.support_)[0]
             top_order = np.argsort(importances)[::-1][:target_num_features]
             final_indices = selected_indices[top_order]
-            selected_features = list(X.columns[final_indices])
+            selected_features = list(X.columns[final_indices.tolist()])
         else:
             selected_features = list(X.columns[rfecv.support_])
     except Exception as e:
@@ -104,13 +105,13 @@ def select_top_features_rfecv(
         estimator.fit(X, y)
         importances = estimator.feature_importances_
         top_idx = np.argsort(importances)[::-1][:min(target_num_features, X.shape[1])]
-        selected_features = list(X.columns[top_idx])
+        selected_features = list(X.columns[top_idx.tolist()])
 
     if len(selected_features) < min(target_num_features, X.shape[1]):
         estimator.fit(X, y)
         importances = estimator.feature_importances_
         top_idx = np.argsort(importances)[::-1][:min(target_num_features, X.shape[1])]
-        selected_features = list(X.columns[top_idx])
+        selected_features = list(X.columns[top_idx.tolist()])
 
     print(f"  - Final core features selected: {len(selected_features)}")
     
@@ -124,6 +125,51 @@ def select_top_features_rfecv(
     return X[selected_features].copy(), selected_features
 
 
+from scipy.stats import spearmanr
+
+
+def audit_and_filter_correlations(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    min_corr: float = 0.10,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Computes Spearman rank correlation (|r|) for all extracted PPG features vs target y across all N=217 subjects.
+    Prints top 10 most correlated features and enforces a STRICT GATE (|r| >= 0.10).
+    """
+    print(f"[FeatureSelection] Step 0: Target Spearman Correlation Audit (Strict Gate |r| >= {min_corr})...")
+    spearman_scores = {}
+    raw_spearman = {}
+    for col in X.columns:
+        arr = np.asarray(X[col].values, dtype=float)
+        try:
+            res_s = spearmanr(arr, y)
+            r_val = float(res_s.statistic) if hasattr(res_s, "statistic") else 0.0
+        except Exception:
+            r_val = 0.0
+        raw_spearman[col] = r_val
+        spearman_scores[col] = abs(r_val)
+
+    # Sort and print Top 10 Most Correlated Features
+    sorted_features = sorted(spearman_scores.keys(), key=lambda c: spearman_scores[c], reverse=True)
+    print("--- TOP 10 SPEARMAN CORRELATED PPG & PHYSIOLOGICAL FEATURES ---")
+    for rank, col in enumerate(sorted_features[:10], start=1):
+        print(f"  {rank:2d}. {col:<35} | Spearman r = {raw_spearman[col]:+.4f} (|r| = {spearman_scores[col]:.4f})")
+    print("----------------------------------------------------------------")
+
+    # STRICT GATE: Drop all features where |r| < 0.10
+    selected = [c for c in X.columns if spearman_scores[c] >= min_corr]
+    print(f"  - Initial extracted features: {X.shape[1]}")
+    print(f"  - Features passing strict Spearman correlation gate (|r| >= {min_corr}): {len(selected)}")
+
+    if len(selected) < 5:
+        print(f"[FeatureSelection] WARNING: Only {len(selected)} features passed strict correlation gate (|r| >= {min_corr}). PPG feature extraction needs Beer-Lambert log-ratio re-engineering!")
+        if len(selected) == 0:
+            selected = sorted_features[:5]
+
+    return X[selected].copy(), selected
+
+
 def run_feature_selection(
     df: pd.DataFrame,
     target_col: str = TARGET_COLUMN,
@@ -133,17 +179,18 @@ def run_feature_selection(
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
     Main entry point for feature reduction pipeline.
-    Accepts full DataFrame, applies Step A (Correlation Filter) & Step B (RFECV/Importance Selection).
+    Accepts full DataFrame, applies Step 0 (Correlation Audit), Step A (Correlation Filter) & Step B (RFECV/Importance Selection).
     Returns reduced feature DataFrame (including Target & Group columns) and list of selected feature names.
     """
     drop_cols = [target_col, group_col]
     feature_cols = [c for c in df.columns if c not in drop_cols]
 
     X = df[feature_cols].copy()
-    y = df[target_col].to_numpy()
-    groups = df[group_col].to_numpy()
+    y = np.asarray(df[target_col].values, dtype=float)
+    groups = np.asarray(df[group_col].values)
 
-    X_filtered, _ = filter_collinear_features(X, y, threshold=corr_threshold)
+    X_audit, _ = audit_and_filter_correlations(X, y, min_corr=0.10)
+    X_filtered, _ = filter_collinear_features(X_audit, y, threshold=corr_threshold)
     X_selected, selected_features = select_top_features_rfecv(
         X_filtered, y, groups, target_num_features=target_num_features
     )

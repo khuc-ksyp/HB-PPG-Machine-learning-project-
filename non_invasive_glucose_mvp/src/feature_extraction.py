@@ -23,6 +23,7 @@ from src.config import (
 from src.signal_processing import (
     preprocess_subject_signals,
     detect_pulse_peaks_and_troughs,
+    butter_lowpass_filter,
 )
 
 
@@ -92,7 +93,7 @@ def extract_channel_morphology(
         ppi_sec = ppi_samples / fs
         features["ppi_mean"] = float(np.mean(ppi_sec))
         features["ppi_std"] = float(np.std(ppi_sec))
-        features["hr_bpm"] = float(60.0 / (features["ppi_mean"] + 1e-8))
+        features["hr_bpm"] = 60.0 / (features["ppi_mean"] + 1e-8)
     else:
         features["ppi_mean"] = 0.8
         features["ppi_std"] = 0.0
@@ -189,7 +190,7 @@ def extract_channel_morphology(
 
     # Accelerated PPG (APPG 2nd-derivative) vascular compliance & reflection index features
     features["b_a_ratio"] = float(b_m / (abs(a_m) + 1e-6))
-    features["reflection_index"] = float(1.0 / (features["area_ratio_mean"] + 1e-6))
+    features["reflection_index"] = 1.0 / (features["area_ratio_mean"] + 1e-6)
 
     return features
 
@@ -199,7 +200,7 @@ def compute_optical_ratios(
     filtered_signal_df: pd.DataFrame
 ) -> Dict[str, float]:
     """
-    Computes AC (peak-to-trough amplitude) and DC (mean baseline intensity)
+    Computes AC (peak-to-trough amplitude) and DC (low-pass filtered at 0.1 Hz)
     per channel, extracts cross-wavelength optical absorption R-values,
     and calculates Hb-specific attenuation & optical ratio features.
     """
@@ -207,21 +208,32 @@ def compute_optical_ratios(
     ratios = {}
 
     for ch in CHANNEL_NAMES:
-        raw_sig = raw_signal_df[ch].to_numpy()
-        filt_sig = filtered_signal_df[ch].to_numpy()
+        raw_sig = np.asarray(raw_signal_df[ch].values, dtype=float)
+        filt_sig = np.asarray(filtered_signal_df[ch].values, dtype=float)
 
-        dc = np.mean(raw_sig)
-        if abs(dc) < 1e-8:
-            dc = 1e-8
+        # DC component: low-pass filtered signal at 0.1 Hz
+        dc_sig = butter_lowpass_filter(raw_sig, cutoff=0.1, fs=SAMPLING_FREQ, order=4)
+        dc = float(np.mean(dc_sig))
+        if abs(dc) < 1e-6:
+            dc = 1e-6
 
-        # AC amplitude: 95th percentile minus 5th percentile of filtered pulse
-        ac = np.percentile(filt_sig, 95) - np.percentile(filt_sig, 5)
+        # AC component: peak-to-peak pulse amplitude
+        ac = float(np.percentile(filt_sig, 95) - np.percentile(filt_sig, 5))
 
-        ac_dc = ac / dc
+        ac_dc = ac / (dc + 1e-6)
         ac_dc_per_channel[ch] = ac_dc
-        ratios[f"AC_DC_{ch}"] = float(ac_dc)
-        ratios[f"DC_{ch}"] = float(dc)
-        ratios[f"AC_{ch}"] = float(ac)
+        ratios[f"AC_DC_{ch}"] = ac_dc
+        ratios[f"DC_{ch}"] = dc
+        ratios[f"AC_{ch}"] = ac
+
+    # Cross-wavelength modulation ratios
+    ac_dc_660 = ac_dc_per_channel["660nm"]
+    ac_dc_730 = ac_dc_per_channel["730nm"]
+    ac_dc_850 = ac_dc_per_channel["850nm"]
+    ac_dc_940 = ac_dc_per_channel["940nm"]
+
+    ratios["Ratio_660_940"] = float(ac_dc_660 / (ac_dc_940 + 1e-6))
+    ratios["Ratio_730_850"] = float(ac_dc_730 / (ac_dc_850 + 1e-6))
 
     # Compute all pairwise optical density ratios R_{lambda1/lambda2} = (AC/DC)_1 / (AC/DC)_2
     pairs = [
@@ -237,7 +249,7 @@ def compute_optical_ratios(
         val1 = ac_dc_per_channel[ch1]
         val2 = ac_dc_per_channel[ch2]
         denom = val2 if abs(val2) > 1e-8 else 1e-8
-        ratios[f"R_{ch1}_{ch2}"] = float(val1 / denom)
+        ratios[f"R_{ch1}_{ch2}"] = val1 / denom
 
     # --------------------------------------------------------------------------
     # Hemoglobin-Specific (Hb) Optical & Attenuation Features
@@ -264,7 +276,7 @@ def compute_optical_ratios(
     ratios["THAI_index"] = float((dc_660 + dc_730) / np.maximum(abs(dc_850 + dc_940), 1e-8))
 
     # 5. PI_730nm (730nm Perfusion Index = (AC_730 / DC_730) * 100)
-    ratios["PI_730nm"] = float(val_730 * 100.0)
+    ratios["PI_730nm"] = val_730 * 100.0
 
     return ratios
 
@@ -280,7 +292,7 @@ def extract_features_for_subject(
     """
     proc = preprocess_subject_signals(raw_signal_df, fs=fs)
 
-    feature_dict = {"ID": subject_id}
+    feature_dict: Dict[str, float] = {"ID": float(subject_id)}
 
     # Demographics & Blood measurements
     demo_fields = ["Age", "Gender", "Height", "Weight", "Hemoglobin", "BMI"]
@@ -302,9 +314,9 @@ def extract_features_for_subject(
     # Per-channel morphological & derivative features
     for ch in CHANNEL_NAMES:
         ch_features = extract_channel_morphology(
-            proc["normalized"][ch].to_numpy(),
-            proc["vpg"][ch].to_numpy(),
-            proc["apg"][ch].to_numpy(),
+            np.asarray(proc["normalized"][ch].values, dtype=float),
+            np.asarray(proc["vpg"][ch].values, dtype=float),
+            np.asarray(proc["apg"][ch].values, dtype=float),
             fs=fs,
         )
         for fname, fval in ch_features.items():
@@ -327,8 +339,8 @@ def extract_features_for_subject(
     b_940 = feature_dict.get("940nm_apg_b_mean", 0.0)
     a_850 = feature_dict.get("850nm_apg_a_mean", 1.0)
 
-    feature_dict["APPG_Ratio_660_940"] = float(b_660 / (abs(b_940) + 1e-6))
-    feature_dict["APPG_Ratio_730_850"] = float(a_730 / (abs(a_850) + 1e-6))
+    feature_dict["APPG_Ratio_660_940"] = b_660 / (abs(b_940) + 1e-6)
+    feature_dict["APPG_Ratio_730_850"] = a_730 / (abs(a_850) + 1e-6)
 
     return feature_dict
 

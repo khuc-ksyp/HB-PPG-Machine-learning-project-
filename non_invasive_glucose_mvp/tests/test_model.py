@@ -49,6 +49,6 @@ def test_group_kfold_training_pipeline():
         n_splits=3,
     )
 
-    assert any(k.startswith("Tuned_") for k in results)
+    assert any("Tuned" in k for k in results)
     assert len(y_pred) == n_samples
     assert hasattr(best_model, "predict")

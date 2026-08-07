@@ -31,6 +31,8 @@ from src.model_trainer import (
 from src.clinical_evaluator import (
     evaluate_clarke_error_grid,
     plot_clarke_error_grid,
+    plot_actual_vs_predicted_scatter,
+    compute_prediction_slope_and_variance,
 )
 from src.explainability import generate_shap_analysis
 from src.feature_selection import run_feature_selection
@@ -81,9 +83,11 @@ def run_pipeline():
     print()
 
     # STEP 6: CLINICAL EVALUATION & CLARKE ERROR GRID
-    print(">>> STEP 6: Clinical Safety Evaluation & Clarke Error Grid Generation...")
+    print(">>> STEP 6: Clinical Safety Evaluation, Slope Audit & Scatter Plot Generation...")
     zone_percentages, _ = evaluate_clarke_error_grid(y_true, y_pred)
     plot_path = plot_clarke_error_grid(y_true, y_pred, save_path=CLARKE_GRID_PLOT_PATH)
+    scatter_path = plot_actual_vs_predicted_scatter(y_true, y_pred, save_path=ARTIFACTS_DIR / "actual_vs_predicted_scatter.png")
+    slope_metrics = compute_prediction_slope_and_variance(y_true, y_pred)
     print()
 
     # STEP 7: SHAP EXPLAINABILITY MODULE
@@ -128,7 +132,27 @@ def run_pipeline():
     print(f"Cleaned Feature File: {CLEANED_FEATURES_PATH.resolve()}")
     print(f"Trained Model Binary: {MODEL_SAVE_PATH.resolve()}")
     print(f"Clarke Grid Image:    {plot_path.resolve()}")
+    print(f"Scatter Plot Image:   {scatter_path.resolve()}")
     print(f"SHAP Summary Image:   {(ARTIFACTS_DIR / 'shap_summary.png').resolve()}")
+
+    print("-------------------------------------------------------------------------------------------------------------------------")
+    print("PREDICTION VARIANCE & TRENDLINE SLOPE VALIDATION:")
+    print(f"  - Fitted Linear Slope (m):             {slope_metrics['slope']:.4f}")
+    print(f"  - Standard Deviation Ratio (std_pred/std_true): {slope_metrics['std_ratio']:.4f}")
+    print(f"  - Reference Glucose Std Dev (std_true):  {slope_metrics['std_true']:.2f} mg/dL")
+    print(f"  - Predicted Glucose Std Dev (std_pred):  {slope_metrics['std_pred']:.2f} mg/dL")
+    print("-------------------------------------------------------------------------------------------------------------------------")
+
+    ens_metrics = benchmark_results.get("MARD_Opt_Ensemble", {})
+    ens_iso = ens_metrics.get("ISO_15197_Compliance", 0.0)
+    ens_mard = ens_metrics.get("MARD", 0.0)
+    ens_mae = ens_metrics.get("MAE", 0.0)
+    ens_ab = ens_metrics.get("Clarke_Zone_A_B", 0.0)
+    iso_pass = "PASSED (>= 95.0%)" if ens_iso >= 95.0 else f"FALLS SHORT of 95.0% target (Achieved {ens_iso:.2f}%)"
+
+    print("ISO 15197:2013 POINT-WISE CLINICAL COMPLIANCE EVALUATION:")
+    print(f"  - MARD-Optimized Ensemble Compliance: {ens_iso:.2f}% | Status: {iso_pass}")
+    print(f"  - Clinical Metrics Summary: MARD = {ens_mard:.2f}%, MAE = {ens_mae:.2f} mg/dL, Clarke Zone A+B = {ens_ab:.2f}%")
     print("=========================================================================================================================")
 
 

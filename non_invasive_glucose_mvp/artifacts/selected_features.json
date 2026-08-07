@@ -1,16 +1,4 @@
 [
   "Age",
-  "Hemoglobin",
-  "Height",
-  "BMI",
-  "R_660nm_850nm",
-  "Weight",
-  "850nm_kurtosis",
-  "AC_850nm",
-  "AC_DC_940nm",
-  "Gender_male",
-  "660nm_ppi_std",
-  "R_660nm_730nm",
-  "THAI_index",
-  "940nm_kurtosis"
+  "BMI"
 ]

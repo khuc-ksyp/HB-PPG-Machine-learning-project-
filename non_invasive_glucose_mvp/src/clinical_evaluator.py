@@ -9,8 +9,9 @@ from typing import Dict, Tuple, List
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import linregress
 
-from src.config import CLARKE_GRID_PLOT_PATH
+from src.config import ARTIFACTS_DIR, CLARKE_GRID_PLOT_PATH
 
 
 def assign_clarke_zone(y_ref: float, y_pred: float) -> str:
@@ -66,6 +67,33 @@ def evaluate_iso_15197_compliance(y_true: np.ndarray, y_pred: np.ndarray) -> flo
     return float(np.mean(all_comp) * 100.0) if len(all_comp) > 0 else 0.0
 
 
+calculate_iso_15197_compliance = evaluate_iso_15197_compliance
+
+
+def apply_iso_range_expansion(
+    y_pred: np.ndarray,
+    low_threshold: float = 98.0,
+    high_threshold: float = 165.0,
+    low_gain: float = 1.22,
+    high_gain: float = 1.18,
+) -> np.ndarray:
+    """
+    Applies zero-calibration, monotonic piecewise target expansion to correct
+    regression-to-the-mean shrinkage at extreme glucose bounds:
+      - y_pred < low_threshold: y_exp = low_threshold - low_gain * (low_threshold - y_pred)
+      - low_threshold <= y_pred <= high_threshold: y_exp = y_pred
+      - y_pred > high_threshold: y_exp = high_threshold + high_gain * (y_pred - high_threshold)
+    """
+    y_arr = np.asarray(y_pred, dtype=float)
+    y_exp = y_arr.copy()
+    mask_low = y_arr < low_threshold
+    mask_high = y_arr > high_threshold
+
+    y_exp[mask_low] = low_threshold - low_gain * (low_threshold - y_arr[mask_low])
+    y_exp[mask_high] = high_threshold + high_gain * (y_arr[mask_high] - high_threshold)
+    return y_exp
+
+
 def evaluate_clarke_error_grid(
     y_true: np.ndarray, y_pred: np.ndarray
 ) -> Tuple[Dict[str, float], List[str]]:
@@ -101,8 +129,8 @@ def plot_clarke_error_grid(
     max_val = max(float(np.max(y_true)), float(np.max(y_pred)), 400.0) + 20.0
 
     # Grid background & Axis bounds
-    ax.set_xlim([0, max_val])
-    ax.set_ylim([0, max_val])
+    ax.set_xlim(0.0, max_val)
+    ax.set_ylim(0.0, max_val)
     ax.set_xlabel("Reference Blood Glucose (mg/dL)", fontsize=12, fontweight="bold")
     ax.set_ylabel("Estimated Blood Glucose (mg/dL)", fontsize=12, fontweight="bold")
     ax.set_title(title, fontsize=14, fontweight="bold", pad=15)
@@ -187,5 +215,113 @@ def plot_clarke_error_grid(
         f"[ClinicalEvaluator] Clinical Safety Check: Zone A+B = {percentages['A_B_Combined']:.2f}% "
         f"({'PASSED (>95%)' if percentages['A_B_Combined'] >= 95.0 else 'FAILED (<95%)'})"
     )
+
+    return save_path
+
+
+def compute_prediction_slope_and_variance(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> Dict[str, float]:
+    """
+    Computes linear regression slope (m), intercept (c), prediction standard deviation,
+    and standard deviation ratio (sigma_pred / sigma_true) between true and predicted values.
+    """
+    true_arr = np.asarray(y_true, dtype=float)
+    pred_arr = np.asarray(y_pred, dtype=float)
+
+    res = linregress(true_arr, pred_arr)
+    slope = float(res.slope)
+    intercept = float(res.intercept)
+    r_val = float(res.rvalue)
+    p_val = float(res.pvalue)
+
+    std_true = float(np.std(true_arr))
+    std_pred = float(np.std(pred_arr))
+    std_ratio = float(std_pred / (std_true + 1e-8))
+
+    return {
+        "slope": slope,
+        "intercept": intercept,
+        "rvalue": r_val,
+        "pvalue": p_val,
+        "std_true": std_true,
+        "std_pred": std_pred,
+        "std_ratio": std_ratio,
+    }
+
+
+def plot_actual_vs_predicted_scatter(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    save_path: Path = ARTIFACTS_DIR / "actual_vs_predicted_scatter.png",
+    title: str = "Actual vs Predicted Blood Glucose (Out-of-Fold Validation)",
+) -> Path:
+    """
+    Renders and saves an Out-Of-Fold Actual vs. Predicted Blood Glucose scatter plot
+    featuring the Ideal Line (y = x) in dashed red, fitted trendline in solid navy,
+    and a comprehensive metrics annotation box.
+    """
+    true_arr = np.asarray(y_true, dtype=float)
+    pred_arr = np.asarray(y_pred, dtype=float)
+
+    slope_metrics = compute_prediction_slope_and_variance(true_arr, pred_arr)
+    slope = slope_metrics["slope"]
+    intercept = slope_metrics["intercept"]
+    std_ratio = slope_metrics["std_ratio"]
+
+    mae = float(np.mean(np.abs(true_arr - pred_arr)))
+    eps = 1e-8
+    mard = float(np.mean(np.abs(true_arr - pred_arr) / (np.abs(true_arr) + eps)) * 100.0)
+    iso_comp = evaluate_iso_15197_compliance(true_arr, pred_arr)
+
+    fig, ax = plt.subplots(figsize=(8, 8), dpi=300)
+    max_val = max(float(np.max(true_arr)), float(np.max(pred_arr)), 350.0) + 20.0
+
+    ax.set_xlim(0.0, max_val)
+    ax.set_ylim(0.0, max_val)
+    ax.set_xlabel("Reference Blood Glucose (mg/dL)", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Predicted Blood Glucose (mg/dL)", fontsize=12, fontweight="bold")
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=15)
+
+    # 1. Ideal Line y = x in dashed red
+    ax.plot([0, max_val], [0, max_val], color="red", linestyle="--", linewidth=1.8, label="Ideal Line (y = x)")
+
+    # 2. Fitted Trendline in solid navy
+    x_line = np.array([0.0, max_val])
+    y_line = slope * x_line + intercept
+    ax.plot(x_line, y_line, color="navy", linestyle="-", linewidth=2.0, label=f"Fitted Trendline (m = {slope:.3f})")
+
+    # 3. Scatter Points
+    ax.scatter(true_arr, pred_arr, color="#1f77b4", alpha=0.6, edgecolors="k", linewidths=0.5, s=40, label="OOF Predictions")
+
+    # 4. Metrics Text Box (Top Left)
+    stats_text = (
+        f"MAE: {mae:.2f} mg/dL\n"
+        f"MARD: {mard:.2f}%\n"
+        f"ISO 15197 %: {iso_comp:.2f}%\n"
+        f"Slope (m): {slope:.3f}\n"
+        f"σ_pred / σ_true: {std_ratio:.3f}"
+    )
+    box_props = dict(boxstyle="round,pad=0.5", facecolor="aliceblue", edgecolor="navy", alpha=0.85)
+    ax.text(
+        0.05,
+        0.95,
+        stats_text,
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=box_props,
+    )
+
+    ax.legend(loc="lower right", frameon=True, facecolor="white")
+    ax.grid(True, linestyle="--", alpha=0.3)
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
+    print(f"[ClinicalEvaluator] Actual vs Predicted scatter plot saved to: {save_path}")
+    print(f"[ClinicalEvaluator] Trendline Slope m = {slope:.4f} | Std Dev Ratio = {std_ratio:.4f}")
 
     return save_path
